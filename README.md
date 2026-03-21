@@ -8,17 +8,11 @@ Interactive 3D live mobile with 900 chrome balance balls, algorithmic motion, an
 
 `Pendulum Wave` is a browser-based artwork built with `Three.js` and `Web Audio API`.
 
-This project is not a pre-rendered loop and not a simple offset animation such as many `sin(t + offset)` motions arranged in parallel.
+900 spheres continuously update their behavior through local proximity, alignment, avoidance, and energy exchange. Sound emerges from sphere interaction, not from a soundtrack.
 
-Instead, 900 spheres continuously update their behavior through:
+[![Pendulum Wave PV](https://img.youtube.com/vi/cFUZgv4QyCs/maxresdefault.jpg)](https://youtu.be/cFUZgv4QyCs)
 
-- local proximity
-- alignment
-- avoidance
-- energy recovery and loss
-- rhythm-gated sound triggering
-
-The result is a persistent algorithmic structure where order, drift, collision avoidance, and sound emerge over time.
+[▶ Watch Demo](https://youtu.be/cFUZgv4QyCs) | [🔗 Try it live](https://wory-bonbon.github.io/pendulum-wave-live/artwork/approved/pendulum_wave_ordered_chaos_resonance.html)
 
 ## Core Idea
 
@@ -29,8 +23,6 @@ The result is a persistent algorithmic structure where order, drift, collision a
 - the system keeps running as an active computational object
 
 ## Demo
-
-[![Pendulum Wave PV](https://img.youtube.com/vi/cFUZgv4QyCs/maxresdefault.jpg)](https://youtu.be/cFUZgv4QyCs)
 
 Main approved artwork:
 
