@@ -110,18 +110,16 @@ And from within that, to allow movements and sounds to appear that are still unk
 
 ## How To Run
 
-Open the approved HTML file in a modern desktop browser.
+Try it live:
 
-Recommended:
+- [Open Pendulum Wave Live](https://wory-bonbon.github.io/pendulum-wave-live/artwork/approved/pendulum_wave_ordered_chaos_resonance.html)
 
-- macOS
-- Google Chrome
+Or open the HTML file locally in a modern desktop browser.
 
-Example:
+Tested on:
 
-```text
-artwork/approved/pendulum_wave_ordered_chaos_resonance.html
-```
+- macOS / Google Chrome
+- Windows / Google Chrome
 
 For audio playback, user interaction is required because of browser audio policies.
 
