@@ -10,7 +10,7 @@ Interactive 3D live mobile with 900 chrome balance balls, algorithmic motion, an
 
 900 spheres continuously update their behavior through local proximity, alignment, avoidance, and energy exchange. Sound emerges from sphere interaction, not from a soundtrack.
 
-[![Pendulum Wave PV](https://img.youtube.com/vi/cFUZgv4QyCs/maxresdefault.jpg)](https://youtu.be/cFUZgv4QyCs)
+[![Pendulum Wave PV](./screenshots/pv-thumbnail.png)](https://youtu.be/cFUZgv4QyCs)
 
 [▶ Watch Demo](https://youtu.be/cFUZgv4QyCs) | [🔗 Try it live](https://wory-bonbon.github.io/pendulum-wave-live/artwork/approved/pendulum_wave_ordered_chaos_resonance.html)
 
