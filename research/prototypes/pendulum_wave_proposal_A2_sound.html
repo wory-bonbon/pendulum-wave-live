@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pendulum Wave Proposal A2 Sound</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;font-family:sans-serif}
+canvas{display:block}
+#info{position:fixed;top:16px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.55);font-size:12px;letter-spacing:.5px;z-index:10}
+#ui{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:12px;z-index:10}
+#ui button{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#ccc;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;transition:all .2s}
+#ui button:hover{background:rgba(255,255,255,.15);color:#fff}
+#ui button.active{background:rgba(255,255,255,.2);color:#fff;border-color:rgba(255,255,255,.4)}
+</style>
+</head>
+<body>
+<div id="info">PROPOSAL A2 SOUND — ORDERED CHAOS / LARGE AMPLITUDE / MINIMAL BOWL TONES</div>
+<div id="ui">
+  <button id="btnWave" class="active">Wave</button>
+  <button id="btnAccelerate">Accelerate</button>
+  <button id="btnBreathe">Breathe</button>
+  <button id="btnCascade">Cascade</button>
+  <button id="btnSound" style="margin-left:12px;border-color:rgba(255,210,140,0.35)">Sound Off</button>
+  <button id="btnAutoOrbit" class="active" style="margin-left:12px;border-color:rgba(100,180,255,0.4)">Auto Orbit</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const GRID = 30;
+const COUNT = GRID * GRID;
+const SPHERE_RADIUS = 0.13;
+const SPACING_X = 0.64;
+const SPACING_Z = 0.35;
+const CEIL_Y = 4.0;
+const BASE_SPEED = 1.15;
+const BASE_AMPLITUDE = 1.14;
+const MIN_GAP = SPHERE_RADIUS * 2.0 + 0.02;
+const TRACK_STIFFNESS = 34.0;
+const ALIGNMENT_FORCE = 8.0;
+const FLOW_FORCE = 6.5;
+const AVOIDANCE_FORCE = 145.0;
+const DAMPING = 8.4;
+const ENERGY_RECOVERY = 0.48;
+const ENERGY_LOSS = 1.85;
+const ITERATIONS = 3;
+
+let scene, camera, renderer, clock, controls;
+let spheres = [];
+let wires = [];
+let currentMode = 'wave';
+let autoOrbit = true;
+let phaseTime = 0;
+let motionTime = 0;
+let audioEnabled = false;
+let audioReady = false;
+let audioCtx = null;
+let masterGain = null;
+let masterComp = null;
+
+const SCALE = [
+  261.63, // C4
+  293.66, // D4
+  329.63, // E4
+  349.23, // F4
+  392.00, // G4
+  440.00, // A4
+  493.88, // B4
+  523.25  // C5
+];
+
+const phaseFunctions = {
+  wave: (row, col) => row * 0.2,
+  accelerate: (row, col) => (row / (GRID - 1)) * (row / (GRID - 1)) * Math.PI * 4,
+  breathe: (row, col) => Math.abs(row - (GRID - 1) * 0.5) * 0.32,
+  cascade: (row, col) => (row % 6) * 0.85
+};
+
+function idx(row, col) {
+  return row * GRID + col;
+}
+
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a0f);
+
+  camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 200);
+  camera.position.set(0, 14, 16);
+  camera.lookAt(0, -1, 0);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  document.body.appendChild(renderer.domElement);
+
+  clock = new THREE.Clock();
+
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 3;
+  controls.maxDistance = 50;
+  controls.maxPolarAngle = Math.PI * 0.85;
+  controls.target.set(0, -0.5, 0);
+
+  const envMap = createChromeEnvMap();
+  const geo = new THREE.SphereGeometry(SPHERE_RADIUS, 48, 48);
+  const steelMat = new THREE.MeshStandardMaterial({
+    metalness: 1.0,
+    roughness: 0.07,
+    envMap,
+    envMapIntensity: 2.0,
+    color: 0xd5d5da,
+  });
+
+  const offsetX = -(GRID - 1) * SPACING_X / 2;
+  const offsetZ = -(GRID - 1) * SPACING_Z / 2;
+
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const baseX = offsetX + c * SPACING_X;
+      const baseZ = offsetZ + r * SPACING_Z;
+
+      const mesh = new THREE.Mesh(geo, steelMat);
+      mesh.position.set(baseX, 0, baseZ);
+      scene.add(mesh);
+
+      const wireGeo = new THREE.BufferGeometry();
+      wireGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+      const wire = new THREE.Line(wireGeo, new THREE.LineBasicMaterial({
+        color: 0x889099,
+        transparent: true,
+        opacity: 0.55,
+      }));
+      scene.add(wire);
+
+      spheres.push({
+        mesh,
+        baseX,
+        baseZ,
+        row: r,
+        col: c,
+        x: baseX,
+        vx: 0,
+        energy: 1.0,
+        targetX: baseX,
+        swingBias: (c / (GRID - 1) - 0.5) * 0.18,
+        localTempo: 0.94 + ((r * 13 + c * 7) % 11) * 0.012,
+        soundCooldown: 0,
+      });
+      wires.push(wire);
+    }
+  }
+
+  const ambient = new THREE.AmbientLight(0x222230, 0.3);
+  scene.add(ambient);
+
+  const keyLight = new THREE.DirectionalLight(0xfff0e0, 0.6);
+  keyLight.position.set(5, 10, 4);
+  scene.add(keyLight);
+
+  const fillLight = new THREE.DirectionalLight(0xd0d8f0, 0.2);
+  fillLight.position.set(-5, 6, -3);
+  scene.add(fillLight);
+
+  const modeButtons = document.querySelectorAll('#ui button:not(#btnAutoOrbit):not(#btnSound)');
+  modeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      modeButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentMode = btn.id.replace('btn', '').toLowerCase();
+    });
+  });
+
+  const btnAuto = document.getElementById('btnAutoOrbit');
+  btnAuto.addEventListener('click', () => {
+    autoOrbit = !autoOrbit;
+    btnAuto.classList.toggle('active', autoOrbit);
+    btnAuto.style.borderColor = autoOrbit ? 'rgba(100,180,255,0.4)' : 'rgba(255,255,255,0.15)';
+  });
+
+  const btnSound = document.getElementById('btnSound');
+  btnSound.addEventListener('click', async () => {
+    if (!audioReady) {
+      await initAudio();
+    }
+    audioEnabled = !audioEnabled;
+    if (audioEnabled && audioCtx && audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+    btnSound.textContent = audioEnabled ? 'Sound On' : 'Sound Off';
+    btnSound.classList.toggle('active', audioEnabled);
+    btnSound.style.borderColor = audioEnabled ? 'rgba(255,210,140,0.55)' : 'rgba(255,210,140,0.35)';
+  });
+
+  window.addEventListener('resize', onResize);
+}
+
+async function initAudio() {
+  if (audioReady) return;
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterComp = audioCtx.createDynamicsCompressor();
+
+  masterGain.gain.value = 0.22;
+  masterComp.threshold.value = -28;
+  masterComp.knee.value = 20;
+  masterComp.ratio.value = 8;
+  masterComp.attack.value = 0.003;
+  masterComp.release.value = 0.2;
+
+  masterGain.connect(masterComp);
+  masterComp.connect(audioCtx.destination);
+
+  if (audioCtx.state === 'suspended') {
+    await audioCtx.resume();
+  }
+
+  audioReady = true;
+}
+
+function getModeSoundProfile() {
+  if (currentMode === 'accelerate') {
+    return { release: 1.6, brightness: 1.15, accent: 1.1, octaveBias: 1 };
+  }
+  if (currentMode === 'breathe') {
+    return { release: 2.6, brightness: 0.92, accent: 0.95, octaveBias: 0 };
+  }
+  if (currentMode === 'cascade') {
+    return { release: 1.9, brightness: 1.0, accent: 1.05, octaveBias: 1 };
+  }
+  return { release: 2.2, brightness: 1.0, accent: 1.0, octaveBias: 0 };
+}
+
+function noteFromRow(row, octaveBias) {
+  const index = Math.floor((row / (GRID - 1)) * (SCALE.length - 1));
+  const freq = SCALE[index];
+  return octaveBias ? freq * 0.5 : freq;
+}
+
+function triggerCollisionSound(left, right, overlap) {
+  if (!audioEnabled || !audioReady || !audioCtx) return;
+
+  const strength = Math.min(overlap / 0.08, 1);
+  const relativeSpeed = Math.min(Math.abs(right.vx - left.vx) / 2.4, 1);
+  const intensity = Math.max(strength * 0.7 + relativeSpeed * 0.6, 0);
+  if (intensity < 0.16) return;
+
+  const now = audioCtx.currentTime;
+  const profile = getModeSoundProfile();
+  const row = left.row;
+  const colCenter = (left.col + right.col) * 0.5;
+  const baseFreq = noteFromRow(row, profile.octaveBias);
+  const detune = (colCenter / (GRID - 1) - 0.5) * 8;
+  const frequency = baseFreq * Math.pow(2, detune / 1200);
+  const release = profile.release + intensity * 0.6;
+  const attack = 0.008;
+  const gainValue = 0.018 + intensity * 0.045 * profile.accent;
+
+  const fundamental = audioCtx.createOscillator();
+  fundamental.type = 'sine';
+  fundamental.frequency.setValueAtTime(frequency, now);
+
+  const shimmer = audioCtx.createOscillator();
+  shimmer.type = 'sine';
+  shimmer.frequency.setValueAtTime(frequency * (2.01 + intensity * 0.015), now);
+
+  const edge = audioCtx.createOscillator();
+  edge.type = 'triangle';
+  edge.frequency.setValueAtTime(frequency * 3.97, now);
+
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.setValueAtTime(900 * profile.brightness + intensity * 700, now);
+  filter.Q.setValueAtTime(0.8, now);
+
+  const toneGain = audioCtx.createGain();
+  toneGain.gain.setValueAtTime(0.0001, now);
+  toneGain.gain.exponentialRampToValueAtTime(gainValue, now + attack);
+  toneGain.gain.exponentialRampToValueAtTime(0.0001, now + release);
+
+  const shimmerGain = audioCtx.createGain();
+  shimmerGain.gain.setValueAtTime(0.0001, now);
+  shimmerGain.gain.exponentialRampToValueAtTime(gainValue * 0.35, now + attack * 1.4);
+  shimmerGain.gain.exponentialRampToValueAtTime(0.0001, now + release * 0.8);
+
+  const edgeGain = audioCtx.createGain();
+  edgeGain.gain.setValueAtTime(0.0001, now);
+  edgeGain.gain.exponentialRampToValueAtTime(gainValue * 0.12, now + attack);
+  edgeGain.gain.exponentialRampToValueAtTime(0.0001, now + release * 0.45);
+
+  const pan = audioCtx.createStereoPanner();
+  pan.pan.setValueAtTime((colCenter / (GRID - 1) - 0.5) * 0.7, now);
+
+  fundamental.connect(toneGain);
+  shimmer.connect(shimmerGain);
+  edge.connect(edgeGain);
+  toneGain.connect(filter);
+  shimmerGain.connect(filter);
+  edgeGain.connect(filter);
+  filter.connect(pan);
+  pan.connect(masterGain);
+
+  fundamental.start(now);
+  shimmer.start(now);
+  edge.start(now);
+  fundamental.stop(now + release + 0.1);
+  shimmer.stop(now + release + 0.1);
+  edge.stop(now + release + 0.1);
+}
+
+function createChromeEnvMap() {
+  const cubeRT = new THREE.WebGLCubeRenderTarget(512);
+  const cubeCamera = new THREE.CubeCamera(0.1, 100, cubeRT);
+  const envScene = new THREE.Scene();
+  const bgGeo = new THREE.SphereGeometry(50, 64, 64);
+  const bgMat = new THREE.ShaderMaterial({
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize((modelMatrix * vec4(position, 1.0)).xyz);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float y = d.y;
+        float grad = smoothstep(-1.0, 1.0, y);
+        vec3 bottomColor = vec3(0.04, 0.04, 0.045);
+        vec3 midColor = vec3(0.22, 0.23, 0.26);
+        vec3 topColor = vec3(0.58, 0.60, 0.65);
+        vec3 c = mix(bottomColor, midColor, smoothstep(0.0, 0.45, grad));
+        c = mix(c, topColor, smoothstep(0.35, 0.85, grad));
+        float overhead = smoothstep(0.7, 0.95, y);
+        c += vec3(0.12, 0.12, 0.14) * overhead;
+        float keyLight = pow(max(0.0, dot(d, normalize(vec3(0.35, 0.65, 0.5)))), 16.0);
+        c += vec3(0.2, 0.18, 0.16) * keyLight;
+        float fillLight = pow(max(0.0, dot(d, normalize(vec3(-0.5, 0.5, -0.3)))), 14.0);
+        c += vec3(0.06, 0.07, 0.09) * fillLight;
+        float groundGlow = smoothstep(-1.0, -0.3, y);
+        c += vec3(0.025, 0.025, 0.03) * (1.0 - groundGlow);
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+    side: THREE.BackSide,
+  });
+  envScene.add(new THREE.Mesh(bgGeo, bgMat));
+  cubeCamera.update(renderer, envScene);
+  return cubeRT.texture;
+}
+
+function computeTargets() {
+  const phaseFn = phaseFunctions[currentMode];
+  const globalBreath = 0.88 + 0.16 * Math.sin(motionTime * 0.23);
+
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    const phase = phaseFn(s.row, s.col);
+    const travelingWave = phaseTime + phase;
+    const crossMod = Math.sin(motionTime * 0.41 + s.col * 0.23) * s.swingBias;
+    const rowFlow = Math.sin(motionTime * 0.16 + s.row * 0.1) * 0.06;
+    const localAmplitude = BASE_AMPLITUDE * globalBreath * (0.76 + s.energy * 0.28);
+    s.targetX = s.baseX + Math.sin(travelingWave * s.localTempo + crossMod) * localAmplitude + rowFlow;
+  }
+}
+
+function simulate(dt) {
+  computeTargets();
+
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    s.soundCooldown = Math.max(0, s.soundCooldown - dt);
+    const left = s.col > 0 ? spheres[idx(s.row, s.col - 1)] : null;
+    const right = s.col < GRID - 1 ? spheres[idx(s.row, s.col + 1)] : null;
+
+    let alignment = 0;
+    let flow = 0;
+    let compression = 0;
+
+    if (left) {
+      alignment += (left.vx - s.vx);
+      flow += (left.x + SPACING_X - s.x);
+      compression += Math.max(0, MIN_GAP + 0.06 - (s.x - left.x));
+    }
+    if (right) {
+      alignment += (right.vx - s.vx);
+      flow += (right.x - SPACING_X - s.x);
+      compression += Math.max(0, MIN_GAP + 0.06 - (right.x - s.x));
+    }
+
+    const targetForce = (s.targetX - s.x) * TRACK_STIFFNESS;
+    const alignmentForce = alignment * ALIGNMENT_FORCE;
+    const flowForce = flow * FLOW_FORCE;
+    const dampingForce = -s.vx * DAMPING;
+    const ax = targetForce + alignmentForce + flowForce + dampingForce;
+
+    s.vx += ax * dt;
+
+    const energyLoss = compression * ENERGY_LOSS * dt;
+    const energyRecovery = ENERGY_RECOVERY * dt;
+    s.energy = THREE.MathUtils.clamp(s.energy + energyRecovery - energyLoss, 0.52, 1.2);
+  }
+
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    s.x += s.vx * dt;
+  }
+
+  for (let iter = 0; iter < ITERATIONS; iter++) {
+    for (let r = 0; r < GRID; r++) {
+      for (let c = 1; c < GRID; c++) {
+        const left = spheres[idx(r, c - 1)];
+        const right = spheres[idx(r, c)];
+        const gap = right.x - left.x;
+
+        if (gap < MIN_GAP) {
+          const overlap = MIN_GAP - gap;
+          if (left.soundCooldown <= 0 && right.soundCooldown <= 0) {
+            triggerCollisionSound(left, right, overlap);
+            left.soundCooldown = 0.1 + overlap * 0.8;
+            right.soundCooldown = 0.1 + overlap * 0.8;
+          }
+          left.x -= overlap * 0.5;
+          right.x += overlap * 0.5;
+          left.vx -= overlap * AVOIDANCE_FORCE * dt;
+          right.vx += overlap * AVOIDANCE_FORCE * dt;
+          left.energy = Math.max(0.52, left.energy - overlap * 0.8);
+          right.energy = Math.max(0.52, right.energy - overlap * 0.8);
+        }
+      }
+    }
+  }
+}
+
+function renderScene(t) {
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    const normalized = THREE.MathUtils.clamp((s.x - s.baseX) / (BASE_AMPLITUDE * 1.25), -1, 1);
+    const arcDip = (1 - Math.sqrt(1 - normalized * normalized)) * 0.32;
+
+    s.mesh.position.x = s.x;
+    s.mesh.position.z = s.baseZ;
+    s.mesh.position.y = -arcDip;
+
+    const wp = wires[i].geometry.attributes.position.array;
+    wp[0] = s.baseX; wp[1] = CEIL_Y; wp[2] = s.baseZ;
+    wp[3] = s.mesh.position.x; wp[4] = s.mesh.position.y; wp[5] = s.mesh.position.z;
+    wires[i].geometry.attributes.position.needsUpdate = true;
+  }
+
+  if (autoOrbit) {
+    const camAngle = t * 0.04;
+    const camR = 18;
+    camera.position.x = Math.sin(camAngle) * camR;
+    camera.position.z = Math.cos(camAngle) * camR;
+    camera.position.y = 10 + Math.sin(t * 0.06) * 3;
+    controls.target.set(0, -0.5, 0);
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 1 / 30);
+  motionTime += dt;
+  phaseTime += dt * BASE_SPEED;
+  simulate(dt);
+  renderScene(phaseTime);
+}
+
+function onResize() {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+
+init();
+animate();
+</script>
+</body>
+</html>

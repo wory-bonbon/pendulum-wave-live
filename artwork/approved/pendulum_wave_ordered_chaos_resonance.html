@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pendulum Wave Proposal A2 Sound Hybrid Metrics Wire Glow</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;font-family:sans-serif}
+canvas{display:block}
+#info{display:none}
+#ui{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:12px;z-index:10}
+#ui button{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#ccc;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;transition:all .2s}
+#ui button:hover{background:rgba(255,255,255,.15);color:#fff}
+#ui button.active{background:rgba(255,255,255,.2);color:#fff;border-color:rgba(255,255,255,.4)}
+#metrics{position:fixed;left:18px;bottom:18px;width:220px;padding:12px 14px;background:rgba(8,10,14,.52);border:1px solid rgba(255,255,255,.08);border-radius:12px;backdrop-filter:blur(10px);z-index:11;color:rgba(255,255,255,.72);pointer-events:none}
+#metrics .title{font-size:10px;letter-spacing:.16em;color:rgba(255,255,255,.45);margin-bottom:9px}
+#metrics .row{display:flex;justify-content:space-between;gap:10px;font-size:11px;line-height:1.7}
+#metrics .label{color:rgba(255,255,255,.46)}
+#metrics .value{color:rgba(255,220,176,.9);font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div id="info">PROPOSAL A2 SOUND HYBRID METRICS WIRE GLOW — PROXIMITY + RHYTHM GATING / MINIMAL BOWL TONES</div>
+<div id="ui">
+  <button id="btnWave" class="active">Wave</button>
+  <button id="btnAccelerate">Accelerate</button>
+  <button id="btnBreathe">Breathe</button>
+  <button id="btnCascade">Cascade</button>
+  <button id="btnSound" style="margin-left:12px;border-color:rgba(255,210,140,0.35)">Sound Off</button>
+  <button id="btnAutoOrbit" class="active" style="margin-left:12px;border-color:rgba(100,180,255,0.4)">Auto Orbit</button>
+</div>
+<div id="metrics">
+  <div class="title">ALGORITHMIC STATE</div>
+  <div class="row"><span class="label">Mode</span><span class="value" id="metricMode">wave</span></div>
+  <div class="row"><span class="label">Tempo Drift</span><span class="value" id="metricTempo">0.000</span></div>
+  <div class="row"><span class="label">Wave Energy</span><span class="value" id="metricEnergy">0.000</span></div>
+  <div class="row"><span class="label">Proximity</span><span class="value" id="metricCompression">0.000</span></div>
+  <div class="row"><span class="label">Collisions</span><span class="value" id="metricCollisions">0</span></div>
+  <div class="row"><span class="label">Sound Events</span><span class="value" id="metricSounds">0</span></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const GRID = 30;
+const COUNT = GRID * GRID;
+const SPHERE_RADIUS = 0.13;
+const SPACING_X = 0.64;
+const SPACING_Z = 0.35;
+const CEIL_Y = 4.0;
+const BASE_SPEED = 1.15;
+const BASE_AMPLITUDE = 1.14;
+const MIN_GAP = SPHERE_RADIUS * 2.0 + 0.02;
+const TRACK_STIFFNESS = 34.0;
+const ALIGNMENT_FORCE = 8.0;
+const FLOW_FORCE = 6.5;
+const AVOIDANCE_FORCE = 145.0;
+const DAMPING = 8.4;
+const ENERGY_RECOVERY = 0.48;
+const ENERGY_LOSS = 1.85;
+const ITERATIONS = 3;
+
+let scene, camera, renderer, clock, controls;
+let spheres = [];
+let wires = [];
+let glowWires = [];
+let currentMode = 'wave';
+let autoOrbit = true;
+let phaseTime = 0;
+let motionTime = 0;
+let audioEnabled = false;
+let audioReady = false;
+let audioCtx = null;
+let masterGain = null;
+let masterComp = null;
+let lastRhythmStamp = '';
+let frameSoundBudget = 0;
+const metrics = {
+  tempoDrift: 0,
+  waveEnergy: 0,
+  proximity: 0,
+  collisions: 0,
+  soundEvents: 0,
+};
+
+const SCALE = [
+  261.63, // C4
+  293.66, // D4
+  329.63, // E4
+  349.23, // F4
+  392.00, // G4
+  440.00, // A4
+  493.88, // B4
+  523.25  // C5
+];
+
+const phaseFunctions = {
+  wave: (row, col) => row * 0.2,
+  accelerate: (row, col) => (row / (GRID - 1)) * (row / (GRID - 1)) * Math.PI * 4,
+  breathe: (row, col) => Math.abs(row - (GRID - 1) * 0.5) * 0.32,
+  cascade: (row, col) => (row % 6) * 0.85
+};
+
+function idx(row, col) {
+  return row * GRID + col;
+}
+
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a0f);
+
+  camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 200);
+  camera.position.set(0, 14, 16);
+  camera.lookAt(0, -1, 0);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  document.body.appendChild(renderer.domElement);
+
+  clock = new THREE.Clock();
+
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 3;
+  controls.maxDistance = 50;
+  controls.maxPolarAngle = Math.PI * 0.85;
+  controls.target.set(0, -0.5, 0);
+
+  const envMap = createChromeEnvMap();
+  const geo = new THREE.SphereGeometry(SPHERE_RADIUS, 48, 48);
+  const steelMat = new THREE.MeshStandardMaterial({
+    metalness: 1.0,
+    roughness: 0.07,
+    envMap,
+    envMapIntensity: 2.0,
+    color: 0xd5d5da,
+  });
+
+  const offsetX = -(GRID - 1) * SPACING_X / 2;
+  const offsetZ = -(GRID - 1) * SPACING_Z / 2;
+
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const baseX = offsetX + c * SPACING_X;
+      const baseZ = offsetZ + r * SPACING_Z;
+
+      const mesh = new THREE.Mesh(geo, steelMat);
+      mesh.position.set(baseX, 0, baseZ);
+      scene.add(mesh);
+
+      const wireGeo = new THREE.BufferGeometry();
+      wireGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+      const wire = new THREE.Line(wireGeo, new THREE.LineBasicMaterial({
+        color: 0x889099,
+        transparent: true,
+        opacity: 0.55,
+      }));
+      scene.add(wire);
+
+      const glowGeo = new THREE.BufferGeometry();
+      glowGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+      const glowWire = new THREE.Line(glowGeo, new THREE.LineBasicMaterial({
+        color: 0xb7d8cf,
+        transparent: true,
+        opacity: 0.0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }));
+      scene.add(glowWire);
+
+      spheres.push({
+        mesh,
+        baseX,
+        baseZ,
+        row: r,
+        col: c,
+        x: baseX,
+        vx: 0,
+        energy: 1.0,
+        targetX: baseX,
+        swingBias: (c / (GRID - 1) - 0.5) * 0.18,
+        localTempo: 0.94 + ((r * 13 + c * 7) % 11) * 0.012,
+        soundCooldown: 0,
+        wirePulse: 0,
+        wirePulseHue: 0,
+      });
+      wires.push(wire);
+      glowWires.push(glowWire);
+    }
+  }
+
+  const ambient = new THREE.AmbientLight(0x222230, 0.3);
+  scene.add(ambient);
+
+  const keyLight = new THREE.DirectionalLight(0xfff0e0, 0.6);
+  keyLight.position.set(5, 10, 4);
+  scene.add(keyLight);
+
+  const fillLight = new THREE.DirectionalLight(0xd0d8f0, 0.2);
+  fillLight.position.set(-5, 6, -3);
+  scene.add(fillLight);
+
+  const modeButtons = document.querySelectorAll('#ui button:not(#btnAutoOrbit):not(#btnSound)');
+  modeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      modeButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentMode = btn.id.replace('btn', '').toLowerCase();
+    });
+  });
+
+  const btnAuto = document.getElementById('btnAutoOrbit');
+  btnAuto.addEventListener('click', () => {
+    autoOrbit = !autoOrbit;
+    btnAuto.classList.toggle('active', autoOrbit);
+    btnAuto.style.borderColor = autoOrbit ? 'rgba(100,180,255,0.4)' : 'rgba(255,255,255,0.15)';
+  });
+
+  const btnSound = document.getElementById('btnSound');
+  btnSound.addEventListener('click', async () => {
+    if (!audioReady) {
+      await initAudio();
+    }
+    audioEnabled = !audioEnabled;
+    if (audioEnabled && audioCtx && audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+    btnSound.textContent = audioEnabled ? 'Sound On' : 'Sound Off';
+    btnSound.classList.toggle('active', audioEnabled);
+    btnSound.style.borderColor = audioEnabled ? 'rgba(255,210,140,0.55)' : 'rgba(255,210,140,0.35)';
+  });
+
+  window.addEventListener('resize', onResize);
+}
+
+async function initAudio() {
+  if (audioReady) return;
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterComp = audioCtx.createDynamicsCompressor();
+
+  masterGain.gain.value = 0.22;
+  masterComp.threshold.value = -28;
+  masterComp.knee.value = 20;
+  masterComp.ratio.value = 8;
+  masterComp.attack.value = 0.003;
+  masterComp.release.value = 0.2;
+
+  masterGain.connect(masterComp);
+  masterComp.connect(audioCtx.destination);
+
+  if (audioCtx.state === 'suspended') {
+    await audioCtx.resume();
+  }
+
+  audioReady = true;
+}
+
+function getModeSoundProfile() {
+  if (currentMode === 'accelerate') {
+    return { release: 1.6, brightness: 1.15, accent: 1.1, octaveBias: 1 };
+  }
+  if (currentMode === 'breathe') {
+    return { release: 2.6, brightness: 0.92, accent: 0.95, octaveBias: 0 };
+  }
+  if (currentMode === 'cascade') {
+    return { release: 1.9, brightness: 1.0, accent: 1.05, octaveBias: 1 };
+  }
+  return { release: 2.2, brightness: 1.0, accent: 1.0, octaveBias: 0 };
+}
+
+function getRhythmProfile() {
+  if (currentMode === 'accelerate') {
+    return { cycle: 1.35, windows: [0.0, 0.22, 0.48, 0.74], width: 0.08, rowDelay: 0.018, colDelay: 0.004 };
+  }
+  if (currentMode === 'breathe') {
+    return { cycle: 1.8, windows: [0.0, 0.18], width: 0.1, rowDelay: 0.0, colDelay: 0.0 };
+  }
+  if (currentMode === 'cascade') {
+    return { cycle: 1.55, windows: [0.0, 0.14, 0.44], width: 0.075, rowDelay: 0.03, colDelay: 0.012 };
+  }
+  return { cycle: 1.5, windows: [0.0, 0.33, 0.66], width: 0.085, rowDelay: 0.01, colDelay: 0.0 };
+}
+
+function updateMetricsPanel() {
+  document.getElementById('metricMode').textContent = currentMode;
+  document.getElementById('metricTempo').textContent = metrics.tempoDrift.toFixed(3);
+  document.getElementById('metricEnergy').textContent = metrics.waveEnergy.toFixed(3);
+  document.getElementById('metricCompression').textContent = metrics.proximity.toFixed(3);
+  document.getElementById('metricCollisions').textContent = String(metrics.collisions);
+  document.getElementById('metricSounds').textContent = String(metrics.soundEvents);
+}
+
+function evaluateRhythmGate(row, col, strength) {
+  const profile = getRhythmProfile();
+  const shifted = motionTime - row * profile.rowDelay - col * profile.colDelay;
+  const phase = ((shifted % profile.cycle) + profile.cycle) % profile.cycle / profile.cycle;
+
+  let bestDistance = 1;
+  let hitIndex = -1;
+  for (let i = 0; i < profile.windows.length; i++) {
+    const windowCenter = profile.windows[i];
+    const wrappedDistance = Math.min(
+      Math.abs(phase - windowCenter),
+      Math.abs(phase - windowCenter + 1),
+      Math.abs(phase - windowCenter - 1)
+    );
+    if (wrappedDistance < bestDistance) {
+      bestDistance = wrappedDistance;
+      hitIndex = i;
+    }
+  }
+
+  if (bestDistance > profile.width) {
+    return null;
+  }
+
+  const openness = 1 - bestDistance / profile.width;
+  const stamp = `${currentMode}:${hitIndex}:${Math.floor(shifted / profile.cycle)}:${row}`;
+  const score = strength * (0.65 + openness * 0.35);
+  return { stamp, score };
+}
+
+function noteFromRow(row, octaveBias) {
+  const index = Math.floor((row / (GRID - 1)) * (SCALE.length - 1));
+  const freq = SCALE[index];
+  return octaveBias ? freq * 0.5 : freq;
+}
+
+function triggerCollisionSound(left, right, overlap) {
+  if (!audioEnabled || !audioReady || !audioCtx || frameSoundBudget <= 0) return;
+
+  const strength = Math.min(overlap / 0.08, 1);
+  const relativeSpeed = Math.min(Math.abs(right.vx - left.vx) / 2.4, 1);
+  const intensity = Math.max(strength * 0.7 + relativeSpeed * 0.6, 0);
+  if (intensity < 0.16) return;
+
+  const now = audioCtx.currentTime;
+  const profile = getModeSoundProfile();
+  const row = left.row;
+  const colCenter = (left.col + right.col) * 0.5;
+  const baseFreq = noteFromRow(row, profile.octaveBias);
+  const detune = (colCenter / (GRID - 1) - 0.5) * 8;
+  const frequency = baseFreq * Math.pow(2, detune / 1200);
+  const release = profile.release + intensity * 0.6;
+  const attack = 0.008;
+  const gainValue = 0.018 + intensity * 0.045 * profile.accent;
+
+  const fundamental = audioCtx.createOscillator();
+  fundamental.type = 'sine';
+  fundamental.frequency.setValueAtTime(frequency, now);
+
+  const shimmer = audioCtx.createOscillator();
+  shimmer.type = 'sine';
+  shimmer.frequency.setValueAtTime(frequency * (2.01 + intensity * 0.015), now);
+
+  const edge = audioCtx.createOscillator();
+  edge.type = 'triangle';
+  edge.frequency.setValueAtTime(frequency * 3.97, now);
+
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.setValueAtTime(900 * profile.brightness + intensity * 700, now);
+  filter.Q.setValueAtTime(0.8, now);
+
+  const toneGain = audioCtx.createGain();
+  toneGain.gain.setValueAtTime(0.0001, now);
+  toneGain.gain.exponentialRampToValueAtTime(gainValue, now + attack);
+  toneGain.gain.exponentialRampToValueAtTime(0.0001, now + release);
+
+  const shimmerGain = audioCtx.createGain();
+  shimmerGain.gain.setValueAtTime(0.0001, now);
+  shimmerGain.gain.exponentialRampToValueAtTime(gainValue * 0.35, now + attack * 1.4);
+  shimmerGain.gain.exponentialRampToValueAtTime(0.0001, now + release * 0.8);
+
+  const edgeGain = audioCtx.createGain();
+  edgeGain.gain.setValueAtTime(0.0001, now);
+  edgeGain.gain.exponentialRampToValueAtTime(gainValue * 0.12, now + attack);
+  edgeGain.gain.exponentialRampToValueAtTime(0.0001, now + release * 0.45);
+
+  const pan = audioCtx.createStereoPanner();
+  pan.pan.setValueAtTime((colCenter / (GRID - 1) - 0.5) * 0.7, now);
+
+  fundamental.connect(toneGain);
+  shimmer.connect(shimmerGain);
+  edge.connect(edgeGain);
+  toneGain.connect(filter);
+  shimmerGain.connect(filter);
+  edgeGain.connect(filter);
+  filter.connect(pan);
+  pan.connect(masterGain);
+
+  fundamental.start(now);
+  shimmer.start(now);
+  edge.start(now);
+  fundamental.stop(now + release + 0.1);
+  shimmer.stop(now + release + 0.1);
+  edge.stop(now + release + 0.1);
+  frameSoundBudget--;
+  metrics.soundEvents++;
+  left.wirePulse = Math.max(left.wirePulse, 1.0);
+  right.wirePulse = Math.max(right.wirePulse, 1.0);
+  left.wirePulseHue = 0.48 + intensity * 0.03;
+  right.wirePulseHue = 0.48 + intensity * 0.03;
+}
+
+function maybeTriggerProximitySound(left, right, gap, compression) {
+  const closeness = THREE.MathUtils.clamp((MIN_GAP + 0.09 - gap) / 0.09, 0, 1);
+  const compressionNorm = THREE.MathUtils.clamp(compression / 0.11, 0, 1);
+  const relativeSpeed = THREE.MathUtils.clamp(Math.abs(right.vx - left.vx) / 2.6, 0, 1);
+  const strength = Math.max(closeness * 0.5 + compressionNorm * 0.8 + relativeSpeed * 0.45, 0);
+  if (strength < 0.24) return false;
+
+  const gate = evaluateRhythmGate(left.row, left.col, strength);
+  if (!gate || gate.stamp === lastRhythmStamp) return false;
+
+  lastRhythmStamp = gate.stamp;
+  triggerCollisionSound(left, right, Math.max(MIN_GAP - gap, 0.002) + compression * 0.45);
+  return true;
+}
+
+function createChromeEnvMap() {
+  const cubeRT = new THREE.WebGLCubeRenderTarget(512);
+  const cubeCamera = new THREE.CubeCamera(0.1, 100, cubeRT);
+  const envScene = new THREE.Scene();
+  const bgGeo = new THREE.SphereGeometry(50, 64, 64);
+  const bgMat = new THREE.ShaderMaterial({
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize((modelMatrix * vec4(position, 1.0)).xyz);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float y = d.y;
+        float grad = smoothstep(-1.0, 1.0, y);
+        vec3 bottomColor = vec3(0.04, 0.04, 0.045);
+        vec3 midColor = vec3(0.22, 0.23, 0.26);
+        vec3 topColor = vec3(0.58, 0.60, 0.65);
+        vec3 c = mix(bottomColor, midColor, smoothstep(0.0, 0.45, grad));
+        c = mix(c, topColor, smoothstep(0.35, 0.85, grad));
+        float overhead = smoothstep(0.7, 0.95, y);
+        c += vec3(0.12, 0.12, 0.14) * overhead;
+        float keyLight = pow(max(0.0, dot(d, normalize(vec3(0.35, 0.65, 0.5)))), 16.0);
+        c += vec3(0.2, 0.18, 0.16) * keyLight;
+        float fillLight = pow(max(0.0, dot(d, normalize(vec3(-0.5, 0.5, -0.3)))), 14.0);
+        c += vec3(0.06, 0.07, 0.09) * fillLight;
+        float groundGlow = smoothstep(-1.0, -0.3, y);
+        c += vec3(0.025, 0.025, 0.03) * (1.0 - groundGlow);
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+    side: THREE.BackSide,
+  });
+  envScene.add(new THREE.Mesh(bgGeo, bgMat));
+  cubeCamera.update(renderer, envScene);
+  return cubeRT.texture;
+}
+
+function computeTargets() {
+  const phaseFn = phaseFunctions[currentMode];
+  const globalBreath = 0.88 + 0.16 * Math.sin(motionTime * 0.23);
+
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    const phase = phaseFn(s.row, s.col);
+    const travelingWave = phaseTime + phase;
+    const crossMod = Math.sin(motionTime * 0.41 + s.col * 0.23) * s.swingBias;
+    const rowFlow = Math.sin(motionTime * 0.16 + s.row * 0.1) * 0.06;
+    const localAmplitude = BASE_AMPLITUDE * globalBreath * (0.76 + s.energy * 0.28);
+    s.targetX = s.baseX + Math.sin(travelingWave * s.localTempo + crossMod) * localAmplitude + rowFlow;
+  }
+}
+
+function simulate(dt) {
+  computeTargets();
+  frameSoundBudget = 2;
+  metrics.tempoDrift = 0;
+  metrics.waveEnergy = 0;
+  metrics.proximity = 0;
+  metrics.collisions = 0;
+  metrics.soundEvents = 0;
+
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    s.soundCooldown = Math.max(0, s.soundCooldown - dt);
+    s.wirePulse = Math.max(0, s.wirePulse - dt * 1.9);
+    metrics.tempoDrift += Math.abs(s.localTempo - 1.0);
+    metrics.waveEnergy += Math.abs(s.vx) * s.energy;
+    const left = s.col > 0 ? spheres[idx(s.row, s.col - 1)] : null;
+    const right = s.col < GRID - 1 ? spheres[idx(s.row, s.col + 1)] : null;
+
+    let alignment = 0;
+    let flow = 0;
+    let compression = 0;
+
+    if (left) {
+      alignment += (left.vx - s.vx);
+      flow += (left.x + SPACING_X - s.x);
+      compression += Math.max(0, MIN_GAP + 0.06 - (s.x - left.x));
+    }
+    if (right) {
+      alignment += (right.vx - s.vx);
+      flow += (right.x - SPACING_X - s.x);
+      compression += Math.max(0, MIN_GAP + 0.06 - (right.x - s.x));
+    }
+
+    const targetForce = (s.targetX - s.x) * TRACK_STIFFNESS;
+    const alignmentForce = alignment * ALIGNMENT_FORCE;
+    const flowForce = flow * FLOW_FORCE;
+    const dampingForce = -s.vx * DAMPING;
+    const ax = targetForce + alignmentForce + flowForce + dampingForce;
+
+    s.vx += ax * dt;
+
+    const energyLoss = compression * ENERGY_LOSS * dt;
+    const energyRecovery = ENERGY_RECOVERY * dt;
+    s.energy = THREE.MathUtils.clamp(s.energy + energyRecovery - energyLoss, 0.52, 1.2);
+    metrics.proximity += compression;
+  }
+
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    s.x += s.vx * dt;
+  }
+
+  for (let iter = 0; iter < ITERATIONS; iter++) {
+    for (let r = 0; r < GRID; r++) {
+      for (let c = 1; c < GRID; c++) {
+        const left = spheres[idx(r, c - 1)];
+        const right = spheres[idx(r, c)];
+        const gap = right.x - left.x;
+        const compression = Math.max(0, MIN_GAP + 0.075 - gap);
+
+        if (left.soundCooldown <= 0 && right.soundCooldown <= 0) {
+          const didTrigger = maybeTriggerProximitySound(left, right, gap, compression);
+          if (didTrigger) {
+            const cooldown = 0.12 + compression * 0.55;
+            left.soundCooldown = Math.max(left.soundCooldown, cooldown);
+            right.soundCooldown = Math.max(right.soundCooldown, cooldown);
+          }
+        }
+
+        if (gap < MIN_GAP) {
+          const overlap = MIN_GAP - gap;
+          metrics.collisions++;
+          left.x -= overlap * 0.5;
+          right.x += overlap * 0.5;
+          left.vx -= overlap * AVOIDANCE_FORCE * dt;
+          right.vx += overlap * AVOIDANCE_FORCE * dt;
+          left.energy = Math.max(0.52, left.energy - overlap * 0.8);
+          right.energy = Math.max(0.52, right.energy - overlap * 0.8);
+        }
+      }
+    }
+  }
+
+  metrics.tempoDrift /= COUNT;
+  metrics.waveEnergy /= COUNT;
+  metrics.proximity /= COUNT;
+}
+
+function renderScene(t) {
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    const normalized = THREE.MathUtils.clamp((s.x - s.baseX) / (BASE_AMPLITUDE * 1.25), -1, 1);
+    const arcDip = (1 - Math.sqrt(1 - normalized * normalized)) * 0.32;
+
+    s.mesh.position.x = s.x;
+    s.mesh.position.z = s.baseZ;
+    s.mesh.position.y = -arcDip;
+
+    const wp = wires[i].geometry.attributes.position.array;
+    wp[0] = s.baseX; wp[1] = CEIL_Y; wp[2] = s.baseZ;
+    wp[3] = s.mesh.position.x; wp[4] = s.mesh.position.y; wp[5] = s.mesh.position.z;
+    wires[i].geometry.attributes.position.needsUpdate = true;
+
+    const glow = glowWires[i];
+    const gp = glow.geometry.attributes.position.array;
+    const pulse = s.wirePulse;
+    if (pulse > 0.001) {
+      const progress = 1 - pulse;
+      const head = THREE.MathUtils.clamp(progress * 1.18, 0, 1);
+      const tail = THREE.MathUtils.clamp(head - 0.16, 0, 1);
+      gp[0] = s.baseX + (s.mesh.position.x - s.baseX) * tail;
+      gp[1] = CEIL_Y + (s.mesh.position.y - CEIL_Y) * tail;
+      gp[2] = s.baseZ;
+      gp[3] = s.baseX + (s.mesh.position.x - s.baseX) * head;
+      gp[4] = CEIL_Y + (s.mesh.position.y - CEIL_Y) * head;
+      gp[5] = s.baseZ;
+      glow.geometry.attributes.position.needsUpdate = true;
+
+      const glowStrength = Math.sin((1 - Math.abs(progress - 0.5) * 2) * Math.PI * 0.5);
+      glow.material.opacity = 0.04 + glowStrength * 0.24;
+      glow.material.color.setHSL(s.wirePulseHue || 0.48, 0.35, 0.72);
+    } else {
+      gp[0] = s.baseX; gp[1] = CEIL_Y; gp[2] = s.baseZ;
+      gp[3] = s.baseX; gp[4] = CEIL_Y; gp[5] = s.baseZ;
+      glow.geometry.attributes.position.needsUpdate = true;
+      glow.material.opacity = 0.0;
+    }
+  }
+
+  if (autoOrbit) {
+    const camAngle = t * 0.04;
+    const camR = 18;
+    camera.position.x = Math.sin(camAngle) * camR;
+    camera.position.z = Math.cos(camAngle) * camR;
+    camera.position.y = 10 + Math.sin(t * 0.06) * 3;
+    controls.target.set(0, -0.5, 0);
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 1 / 30);
+  motionTime += dt;
+  phaseTime += dt * BASE_SPEED;
+  simulate(dt);
+  updateMetricsPanel();
+  renderScene(phaseTime);
+}
+
+function onResize() {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+
+init();
+animate();
+</script>
+</body>
+</html>

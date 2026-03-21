@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pendulum Wave — Chrome Grid 30×30</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;font-family:sans-serif}
+canvas{display:block}
+#ui{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:12px;z-index:10}
+#ui button{background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);color:#ccc;
+  padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;transition:all .2s}
+#ui button:hover{background:rgba(255,255,255,0.15);color:#fff}
+#ui button.active{background:rgba(255,255,255,0.2);color:#fff;border-color:rgba(255,255,255,0.4)}
+#info{position:fixed;top:16px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.5);
+  font-size:12px;letter-spacing:0.5px;z-index:10}
+</style>
+</head>
+<body>
+<div id="info">PENDULUM WAVE — 900 CHROME SPHERES — drag: rotate / scroll: zoom / right-drag: pan</div>
+<div id="ui">
+  <button id="btnWave" class="active">Wave</button>
+  <button id="btnAccelerate">Accelerate</button>
+  <button id="btnBreathe">Breathe</button>
+  <button id="btnCascade">Cascade</button>
+  <button id="btnAutoOrbit" class="active" style="margin-left:12px;border-color:rgba(100,180,255,0.4)">Auto Orbit</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const GRID = 30;
+const COUNT = GRID * GRID;
+const SPHERE_RADIUS = 0.13;
+const SPACING_X = 0.5;          // swing axis — tighter
+const SPACING_Z = 0.35;         // non-swing axis — just needs to clear diameter
+const SWING = 0.8;              // large swing! bigger than sphere diameter
+const BASE_SPEED = 1.2;
+
+let scene, camera, renderer, clock, controls;
+let spheres = [];
+let wires = [];
+let currentMode = 'wave';
+let autoOrbit = true;
+
+// Phase functions — controls the wave pattern across the grid
+// COLLISION RULE: All spheres swing along X axis.
+// Same row (same Z) MUST have same phase → same X displacement → never collide.
+// Pattern variation is created by how phase changes across ROWS (Z axis).
+const phaseFunctions = {
+  wave: (row, col) => row * 0.22,
+  accelerate: (row, col) => (row / GRID) * (row / GRID) * Math.PI * 4,
+  breathe: (row, col) => {
+    // Rows from center outward get increasing phase — concentric wave
+    const cy = (GRID - 1) / 2;
+    return Math.abs(row - cy) * 0.35;
+  },
+  cascade: (row, col) => {
+    // Sawtooth — every 6 rows resets, creating cascading bands
+    return (row % 6) * 0.9;
+  }
+};
+
+// All spheres swing along X axis — direction is uniform
+
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a0f);
+
+  camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 200);
+  camera.position.set(0, 14, 16);
+  camera.lookAt(0, -1, 0);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  document.body.appendChild(renderer.domElement);
+
+  clock = new THREE.Clock();
+
+  // OrbitControls — zoom, pan, rotate
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 3;
+  controls.maxDistance = 50;
+  controls.maxPolarAngle = Math.PI * 0.85;
+  controls.target.set(0, -0.5, 0);
+
+  // Create chrome environment cubemap
+  const envMap = createChromeEnvMap();
+
+  // Sphere geometry (shared) — higher poly for smoother reflections
+  const geo = new THREE.SphereGeometry(SPHERE_RADIUS, 48, 48);
+
+  // Shared material — all spheres use same steel material
+  const steelMat = new THREE.MeshStandardMaterial({
+    metalness: 1.0,
+    roughness: 0.07,
+    envMap: envMap,
+    envMapIntensity: 2.0,
+    color: 0xd5d5da,
+  });
+
+  // Create spheres
+  const offsetX = -(GRID - 1) * SPACING_X / 2;
+  const offsetZ = -(GRID - 1) * SPACING_Z / 2;
+
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const baseX = offsetX + c * SPACING_X;
+      const baseZ = offsetZ + r * SPACING_Z;
+      const baseY = 0;
+
+      const mesh = new THREE.Mesh(geo, steelMat);
+      mesh.position.set(baseX, baseY, baseZ);
+      scene.add(mesh);
+
+      // Wire (string) from ceiling — thin metallic thread
+      const wireGeo = new THREE.BufferGeometry();
+      const wirePositions = new Float32Array(6);
+      wireGeo.setAttribute('position', new THREE.BufferAttribute(wirePositions, 3));
+      const wireMat = new THREE.LineBasicMaterial({
+        color: 0x889099,
+        transparent: true,
+        opacity: 0.55,
+      });
+      const wire = new THREE.Line(wireGeo, wireMat);
+      scene.add(wire);
+
+      spheres.push({
+        mesh,
+        baseX,
+        baseZ,
+        row: r,
+        col: c,
+      });
+      wires.push(wire);
+    }
+  }
+
+  // Lighting — studio setup for steel
+  const ambient = new THREE.AmbientLight(0x222230, 0.3);
+  scene.add(ambient);
+
+  // Key light: warm, from above-right
+  const keyLight = new THREE.DirectionalLight(0xfff0e0, 0.6);
+  keyLight.position.set(5, 10, 4);
+  scene.add(keyLight);
+
+  // Fill light: cool, softer, from left
+  const fillLight = new THREE.DirectionalLight(0xd0d8f0, 0.2);
+  fillLight.position.set(-5, 6, -3);
+  scene.add(fillLight);
+
+  // UI — mode buttons (exclude autoOrbit from mode switching)
+  const modeButtons = document.querySelectorAll('#ui button:not(#btnAutoOrbit)');
+  modeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      modeButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentMode = btn.id.replace('btn', '').toLowerCase();
+    });
+  });
+
+  // Auto Orbit toggle
+  const btnAuto = document.getElementById('btnAutoOrbit');
+  btnAuto.addEventListener('click', () => {
+    autoOrbit = !autoOrbit;
+    btnAuto.classList.toggle('active', autoOrbit);
+    btnAuto.style.borderColor = autoOrbit ? 'rgba(100,180,255,0.4)' : 'rgba(255,255,255,0.15)';
+  });
+
+  window.addEventListener('resize', onResize);
+}
+
+function createChromeEnvMap() {
+  const cubeRT = new THREE.WebGLCubeRenderTarget(512);
+  const cubeCamera = new THREE.CubeCamera(0.1, 100, cubeRT);
+  const envScene = new THREE.Scene();
+
+  // Smooth studio room environment — mimics a real photography studio
+  // with soft ceiling light, warm floor, and gradient walls
+  const bgGeo = new THREE.SphereGeometry(50, 64, 64);
+  const bgMat = new THREE.ShaderMaterial({
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize((modelMatrix * vec4(position, 1.0)).xyz);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float y = d.y;
+
+        // Stainless steel studio environment
+        // Real steel balls reflect a smooth gradient: not white/black split
+        // but a continuous bright-top to dark-bottom with a soft middle zone
+
+        // Full-range smooth gradient using a single smoothstep with wide range
+        float grad = smoothstep(-1.0, 1.0, y);  // 0 at bottom, 1 at top
+
+        // Build color from gradient — bottom is dark warm, top is bright cool
+        vec3 bottomColor = vec3(0.04, 0.04, 0.045);    // very dark, not pure black
+        vec3 midColor    = vec3(0.22, 0.23, 0.26);      // mid grey — the equator zone
+        vec3 topColor    = vec3(0.58, 0.60, 0.65);      // bright but NOT white
+
+        // Two-step blend for natural falloff
+        vec3 c = mix(bottomColor, midColor, smoothstep(0.0, 0.45, grad));
+        c = mix(c, topColor, smoothstep(0.35, 0.85, grad));
+
+        // Soft overhead panel — controlled, doesn't blow out
+        float overhead = smoothstep(0.7, 0.95, y);
+        c += vec3(0.12, 0.12, 0.14) * overhead;
+
+        // Key light: warm, moderate
+        float keyLight = pow(max(0.0, dot(d, normalize(vec3(0.35, 0.65, 0.5)))), 16.0);
+        c += vec3(0.2, 0.18, 0.16) * keyLight;
+
+        // Fill: cool, subtle, from left
+        float fillLight = pow(max(0.0, dot(d, normalize(vec3(-0.5, 0.5, -0.3)))), 14.0);
+        c += vec3(0.06, 0.07, 0.09) * fillLight;
+
+        // Subtle ground ambient — very diffuse, prevents pure black bottom
+        // (broad and dim so it doesn't create point reflections)
+        float groundGlow = smoothstep(-1.0, -0.3, y);
+        c += vec3(0.025, 0.025, 0.03) * (1.0 - groundGlow);
+
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+    side: THREE.BackSide,
+  });
+  envScene.add(new THREE.Mesh(bgGeo, bgMat));
+
+  cubeCamera.position.set(0, 0, 0);
+  cubeCamera.update(renderer, envScene);
+  return cubeRT.texture;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const t = clock.getElapsedTime() * BASE_SPEED;
+  const CEIL_Y = 4.0;
+  const phaseFn = phaseFunctions[currentMode];
+
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    const phase = phaseFn(s.row, s.col);
+    const swing = Math.sin(t + phase) * SWING;
+
+    // Swing along X only — Z position is fixed (row spacing)
+    s.mesh.position.x = s.baseX + swing;
+    s.mesh.position.z = s.baseZ;
+
+    // Pendulum arc — slight Y dip at swing extremes
+    const arcDip = (1 - Math.cos(t + phase)) * 0.06;
+    s.mesh.position.y = -arcDip;
+
+    // Update wire
+    const wp = wires[i].geometry.attributes.position.array;
+    wp[0] = s.baseX; wp[1] = CEIL_Y; wp[2] = s.baseZ;
+    wp[3] = s.mesh.position.x; wp[4] = s.mesh.position.y; wp[5] = s.mesh.position.z;
+    wires[i].geometry.attributes.position.needsUpdate = true;
+  }
+
+  // Camera
+  if (autoOrbit) {
+    const camAngle = t * 0.04;
+    const camR = 18;
+    camera.position.x = Math.sin(camAngle) * camR;
+    camera.position.z = Math.cos(camAngle) * camR;
+    camera.position.y = 10 + Math.sin(t * 0.06) * 3;
+    controls.target.set(0, -0.5, 0);
+  }
+  controls.update();
+
+  renderer.render(scene, camera);
+}
+
+function onResize() {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+
+init();
+animate();
+</script>
+</body>
+</html>

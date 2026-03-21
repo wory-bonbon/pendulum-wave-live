@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pendulum Wave Proposal B</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;font-family:sans-serif}
+canvas{display:block}
+#info{position:fixed;top:16px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.55);font-size:12px;letter-spacing:.5px;z-index:10}
+#ui{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:12px;z-index:10}
+#ui button{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#ccc;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;transition:all .2s}
+#ui button:hover{background:rgba(255,255,255,.15);color:#fff}
+#ui button.active{background:rgba(255,255,255,.2);color:#fff;border-color:rgba(255,255,255,.4)}
+</style>
+</head>
+<body>
+<div id="info">PROPOSAL B — PREDICTIVE POSITION SOLVER — 900 CHROME SPHERES</div>
+<div id="ui">
+  <button id="btnWave" class="active">Wave</button>
+  <button id="btnAccelerate">Accelerate</button>
+  <button id="btnBreathe">Breathe</button>
+  <button id="btnCascade">Cascade</button>
+  <button id="btnAutoOrbit" class="active" style="margin-left:12px;border-color:rgba(100,180,255,0.4)">Auto Orbit</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const GRID = 30;
+const COUNT = GRID * GRID;
+const SPHERE_RADIUS = 0.13;
+const SPACING_X = 0.5;
+const SPACING_Z = 0.35;
+const CEIL_Y = 4.0;
+const SWING = 0.8;
+const BASE_SPEED = 1.2;
+const MIN_GAP = SPHERE_RADIUS * 2.0 + 0.02;
+const SOLVER_ITERATIONS = 5;
+const SMOOTHING = 0.22;
+
+let scene, camera, renderer, clock, controls;
+let spheres = [];
+let wires = [];
+let currentMode = 'wave';
+let autoOrbit = true;
+
+const phaseFunctions = {
+  wave: (row, col) => row * 0.22 + col * 0.05,
+  accelerate: (row, col) => (row / (GRID - 1)) * (row / (GRID - 1)) * Math.PI * 4 + col * 0.035,
+  breathe: (row, col) => Math.abs(row - (GRID - 1) * 0.5) * 0.35 + Math.sin(col * 0.25) * 0.12,
+  cascade: (row, col) => (row % 6) * 0.9 + (col % 5) * 0.08
+};
+
+function idx(row, col) {
+  return row * GRID + col;
+}
+
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a0f);
+
+  camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 200);
+  camera.position.set(0, 14, 16);
+  camera.lookAt(0, -1, 0);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  document.body.appendChild(renderer.domElement);
+
+  clock = new THREE.Clock();
+
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 3;
+  controls.maxDistance = 50;
+  controls.maxPolarAngle = Math.PI * 0.85;
+  controls.target.set(0, -0.5, 0);
+
+  const envMap = createChromeEnvMap();
+  const geo = new THREE.SphereGeometry(SPHERE_RADIUS, 48, 48);
+  const steelMat = new THREE.MeshStandardMaterial({
+    metalness: 1.0,
+    roughness: 0.07,
+    envMap,
+    envMapIntensity: 2.0,
+    color: 0xd5d5da,
+  });
+
+  const offsetX = -(GRID - 1) * SPACING_X / 2;
+  const offsetZ = -(GRID - 1) * SPACING_Z / 2;
+
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const baseX = offsetX + c * SPACING_X;
+      const baseZ = offsetZ + r * SPACING_Z;
+      const mesh = new THREE.Mesh(geo, steelMat);
+      mesh.position.set(baseX, 0, baseZ);
+      scene.add(mesh);
+
+      const wireGeo = new THREE.BufferGeometry();
+      wireGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+      const wire = new THREE.Line(wireGeo, new THREE.LineBasicMaterial({
+        color: 0x889099,
+        transparent: true,
+        opacity: 0.55,
+      }));
+      scene.add(wire);
+
+      spheres.push({
+        mesh,
+        baseX,
+        baseZ,
+        row: r,
+        col: c,
+        x: baseX,
+        desiredX: baseX,
+        solvedX: baseX,
+      });
+      wires.push(wire);
+    }
+  }
+
+  const ambient = new THREE.AmbientLight(0x222230, 0.3);
+  scene.add(ambient);
+
+  const keyLight = new THREE.DirectionalLight(0xfff0e0, 0.6);
+  keyLight.position.set(5, 10, 4);
+  scene.add(keyLight);
+
+  const fillLight = new THREE.DirectionalLight(0xd0d8f0, 0.2);
+  fillLight.position.set(-5, 6, -3);
+  scene.add(fillLight);
+
+  const modeButtons = document.querySelectorAll('#ui button:not(#btnAutoOrbit)');
+  modeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      modeButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentMode = btn.id.replace('btn', '').toLowerCase();
+    });
+  });
+
+  const btnAuto = document.getElementById('btnAutoOrbit');
+  btnAuto.addEventListener('click', () => {
+    autoOrbit = !autoOrbit;
+    btnAuto.classList.toggle('active', autoOrbit);
+    btnAuto.style.borderColor = autoOrbit ? 'rgba(100,180,255,0.4)' : 'rgba(255,255,255,0.15)';
+  });
+
+  window.addEventListener('resize', onResize);
+}
+
+function createChromeEnvMap() {
+  const cubeRT = new THREE.WebGLCubeRenderTarget(512);
+  const cubeCamera = new THREE.CubeCamera(0.1, 100, cubeRT);
+  const envScene = new THREE.Scene();
+  const bgGeo = new THREE.SphereGeometry(50, 64, 64);
+  const bgMat = new THREE.ShaderMaterial({
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize((modelMatrix * vec4(position, 1.0)).xyz);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float y = d.y;
+        float grad = smoothstep(-1.0, 1.0, y);
+        vec3 bottomColor = vec3(0.04, 0.04, 0.045);
+        vec3 midColor = vec3(0.22, 0.23, 0.26);
+        vec3 topColor = vec3(0.58, 0.60, 0.65);
+        vec3 c = mix(bottomColor, midColor, smoothstep(0.0, 0.45, grad));
+        c = mix(c, topColor, smoothstep(0.35, 0.85, grad));
+        float overhead = smoothstep(0.7, 0.95, y);
+        c += vec3(0.12, 0.12, 0.14) * overhead;
+        float keyLight = pow(max(0.0, dot(d, normalize(vec3(0.35, 0.65, 0.5)))), 16.0);
+        c += vec3(0.2, 0.18, 0.16) * keyLight;
+        float fillLight = pow(max(0.0, dot(d, normalize(vec3(-0.5, 0.5, -0.3)))), 14.0);
+        c += vec3(0.06, 0.07, 0.09) * fillLight;
+        float groundGlow = smoothstep(-1.0, -0.3, y);
+        c += vec3(0.025, 0.025, 0.03) * (1.0 - groundGlow);
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+    side: THREE.BackSide,
+  });
+  envScene.add(new THREE.Mesh(bgGeo, bgMat));
+  cubeCamera.update(renderer, envScene);
+  return cubeRT.texture;
+}
+
+function solveFrame(t) {
+  const phaseFn = phaseFunctions[currentMode];
+
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    const phase = phaseFn(s.row, s.col);
+    s.desiredX = s.baseX + Math.sin(t + phase) * SWING;
+    s.solvedX = s.desiredX;
+  }
+
+  for (let iter = 0; iter < SOLVER_ITERATIONS; iter++) {
+    for (let r = 0; r < GRID; r++) {
+      for (let c = 1; c < GRID; c++) {
+        const left = spheres[idx(r, c - 1)];
+        const right = spheres[idx(r, c)];
+        const gap = right.solvedX - left.solvedX;
+        if (gap < MIN_GAP) {
+          const overlap = MIN_GAP - gap;
+          const leftSlack = Math.abs(left.desiredX - left.solvedX) + 0.0001;
+          const rightSlack = Math.abs(right.desiredX - right.solvedX) + 0.0001;
+          const totalSlack = leftSlack + rightSlack;
+          left.solvedX -= overlap * (rightSlack / totalSlack);
+          right.solvedX += overlap * (leftSlack / totalSlack);
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    s.x += (s.solvedX - s.x) * SMOOTHING;
+  }
+}
+
+function renderScene(t) {
+  for (let i = 0; i < COUNT; i++) {
+    const s = spheres[i];
+    const normalized = (s.x - s.baseX) / SWING;
+    const clamped = THREE.MathUtils.clamp(normalized, -1, 1);
+    const arcDip = (1 - Math.sqrt(1 - clamped * clamped)) * 0.24;
+
+    s.mesh.position.x = s.x;
+    s.mesh.position.z = s.baseZ;
+    s.mesh.position.y = -arcDip;
+
+    const wp = wires[i].geometry.attributes.position.array;
+    wp[0] = s.baseX; wp[1] = CEIL_Y; wp[2] = s.baseZ;
+    wp[3] = s.mesh.position.x; wp[4] = s.mesh.position.y; wp[5] = s.mesh.position.z;
+    wires[i].geometry.attributes.position.needsUpdate = true;
+  }
+
+  if (autoOrbit) {
+    const camAngle = t * 0.04;
+    const camR = 18;
+    camera.position.x = Math.sin(camAngle) * camR;
+    camera.position.z = Math.cos(camAngle) * camR;
+    camera.position.y = 10 + Math.sin(t * 0.06) * 3;
+    controls.target.set(0, -0.5, 0);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime() * BASE_SPEED;
+  solveFrame(t);
+  renderScene(t);
+}
+
+function onResize() {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+
+init();
+animate();
+</script>
+</body>
+</html>
