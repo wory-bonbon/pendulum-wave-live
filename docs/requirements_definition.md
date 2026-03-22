@@ -199,6 +199,6 @@ The project should avoid the following:
 
 The approved artwork file at the current stage is:
 
-- [pendulum_wave_ordered_chaos_resonance.html](/Users/sawor/Dev/Pendulum_Wave/output/approval/pendulum_wave_ordered_chaos_resonance.html)
+- [pendulum_wave_ordered_chaos_resonance.html](../artwork/approved/pendulum_wave_ordered_chaos_resonance.html)
 
 This file represents the current accepted direction and should be treated as the main approval reference for future refinement.

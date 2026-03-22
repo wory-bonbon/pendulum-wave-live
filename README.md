@@ -78,8 +78,7 @@ And from within that, to allow movements and sounds to appear that are still unk
 ├── screenshots/
 │   └── ui-overview.png
 ├── LICENSE
-├── README.md
-└── README_draft.md
+└── README.md
 ```
 
 ## Features
@@ -97,8 +96,9 @@ And from within that, to allow movements and sounds to appear that are still unk
 
 - `HTML`
 - `JavaScript`
-- `Three.js`
+- `Three.js` r128 (loaded from cdnjs / jsDelivr CDN)
 - `Web Audio API`
+- `Google Fonts` — Cormorant Garamond (PV demo only)
 
 ## How To Run
 

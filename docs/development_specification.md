@@ -17,7 +17,7 @@ This specification is not a concept memo. It is a development-facing description
 ## 2. Current Approved Artifact
 
 - Main approved file:
-  [pendulum_wave_ordered_chaos_resonance.html](/Users/sawor/Dev/Pendulum_Wave/output/approval/pendulum_wave_ordered_chaos_resonance.html)
+  [pendulum_wave_ordered_chaos_resonance.html](../artwork/approved/pendulum_wave_ordered_chaos_resonance.html)
 
 This file is the baseline implementation reference for future revisions.
 
@@ -266,13 +266,13 @@ If needed, they must live in separate development-only files.
 
 Current project-relevant outputs are organized under:
 
-- [output](/Users/sawor/Dev/Pendulum_Wave/output)
-- [output/approval](/Users/sawor/Dev/Pendulum_Wave/output/approval)
+- [artwork](../artwork)
+- [artwork/approved](../artwork/approved)
 
 Recommended future structure:
 
-- approved artifact in `output/approval/`
-- exploratory variants in `output/`
+- approved artifact in `artwork/approved/`
+- exploratory variants in `research/`
 - documentation in project root
 
 ## 14. Skill Conversion Guidance
