@@ -40,7 +40,7 @@ That is part of the project itself: the video-style presentation is generated as
 
 This repository also documents a process-based aspect of the work.
 
-The artwork and the PV HTML were developed through iterative collaboration in CLI-based coding workflows, and the resulting HTML artifacts are intentionally kept in the repository.
+The artwork and the PV HTML were developed through iterative collaboration in CLI-based coding workflows (Codex, Claude Code), and the resulting HTML artifacts are intentionally kept in the repository.
 
 This means visitors can inspect:
 
@@ -153,16 +153,3 @@ This project is released under the `MIT` License.
 
 See [LICENSE](./LICENSE).
 
-## Credit
-
-Original concept and implementation direction by **wory**.
-
-Created by **wory-bonbon**.
-
-Built with **Codex & Claude Code & Claude Opus 4.6**.
-
-If you reuse or adapt this project, please retain credit to the original project and concept.
-
-Suggested repository credit line:
-
-> Original concept and implementation direction by wory. Created by wory-bonbon. Built with Codex & Claude Code & Claude Opus 4.6.
